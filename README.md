@@ -1,3 +1,8 @@
+------------
+BE ATTENTION. ALL IS GENERATE BY CLAUDE CODE.
+-----------
+
+
 # PNG なのに HDR で光る? PQ + ICC で部分グロー画像を作る仕組み
 
 > 8bit の普通の PNG を HDR ディスプレイで光らせる仕掛けを解剖する。PQ 符号化、ICC プロファイル埋め込み、そして X(Twitter) で `iCCP` が落ちないようにする工夫まで。
