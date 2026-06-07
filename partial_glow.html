@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HDR 部分光らせるやつ ✨</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #111; color: #eee; }
+  .app { display: flex; flex-direction: column; min-height: 100vh; }
+  header { padding: 12px 16px; background: #1b1b1b; border-bottom: 1px solid #2a2a2a; }
+  h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  h1 small { font-weight: 400; color: #888; margin-left: 8px; }
+  .toolbar { display: flex; gap: 8px; padding: 10px 16px; background: #1b1b1b; flex-wrap: wrap; align-items: center; border-bottom: 1px solid #2a2a2a; }
+  .toolbar button, .toolbar label.file { padding: 7px 12px; background: #2a2a2a; color: #eee; border: 1px solid #3a3a3a; border-radius: 6px; cursor: pointer; font-size: 13px; user-select: none; }
+  .toolbar button:hover, .toolbar label.file:hover { background: #333; }
+  .toolbar button.active { background: #2563eb; border-color: #3b82f6; }
+  .toolbar button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .toolbar .group { display: flex; gap: 6px; padding-right: 8px; border-right: 1px solid #2a2a2a; }
+  .toolbar .group:last-child { border-right: none; }
+  .toolbar .save { background: #16a34a; border-color: #22c55e; }
+  .toolbar .save:hover { background: #15803d; }
+  .file input { display: none; }
+  .sliders { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 20px; padding: 12px 16px; background: #1b1b1b; border-bottom: 1px solid #2a2a2a; }
+  .slider-row label { display: block; font-size: 12px; color: #aaa; margin-bottom: 4px; }
+  .slider-row .val { color: #fff; font-weight: 600; margin-left: 4px; }
+  .slider-row input[type=range] { width: 100%; }
+  .slider-row.disabled { opacity: 0.45; pointer-events: none; }
+  .canvas-area { flex: 1; padding: 16px; display: flex; justify-content: center; align-items: flex-start; background:
+    repeating-conic-gradient(#1a1a1a 0% 25%, #222 0% 50%) 0 0/24px 24px; }
+  .canvas-wrap { position: relative; max-width: 100%; }
+  canvas { display: block; max-width: 100%; height: auto; touch-action: none; background: #000; border-radius: 6px; box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
+  .status { padding: 8px 16px; background: #1b1b1b; font-size: 12px; color: #888; border-top: 1px solid #2a2a2a; }
+  .hint { color: #888; font-size: 12px; margin-left: auto; align-self: center; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header><h1>HDR 部分光らせるやつ ✨ <small>円/矩形で選択した範囲だけPQ HDRで光らせます</small></h1></header>
+  <div class="toolbar">
+    <div class="group">
+      <label class="file"><input type="file" id="loadFile" accept="image/*">画像を読み込む</label>
+    </div>
+    <div class="group">
+      <button id="toolSelect" class="active">↖ 選択/移動</button>
+      <button id="toolEllipse">○ 円を追加</button>
+      <button id="toolRect">▭ 矩形を追加</button>
+    </div>
+    <div class="group">
+      <button id="deleteBtn" disabled>削除</button>
+      <button id="clearBtn">全削除</button>
+    </div>
+    <div class="group">
+      <button id="shareBtn" class="save">X/共有 (推奨)</button>
+      <button id="saveBtn">HDR PNGを保存</button>
+    </div>
+    <span class="hint">作成: ドラッグ / 編集: 四隅で拡縮・上の○で回転(Shiftで15°スナップ)・内側で移動</span>
+  </div>
+  <div class="sliders">
+    <div class="slider-row" id="brightnessRow">
+      <label>選択した形の輝度<span class="val" id="brightnessVal">2000</span> nits</label>
+      <input type="range" id="brightness" min="200" max="5000" step="50" value="2000">
+    </div>
+    <div class="slider-row" id="featherRow">
+      <label>ぼかし(エッジの柔らかさ)<span class="val" id="featherVal">30</span> px</label>
+      <input type="range" id="feather" min="0" max="200" step="1" value="30">
+    </div>
+    <div class="slider-row">
+      <label>背景の明るさ(光らない部分)<span class="val" id="bgVal">203</span> nits</label>
+      <input type="range" id="bg" min="80" max="400" step="1" value="203">
+    </div>
+    <div class="slider-row">
+      <label>最大出力サイズ<span class="val" id="maxSizeVal">1080</span> px (X再エンコ回避用)</label>
+      <select id="maxSize" style="width:100%; padding:6px; background:#2a2a2a; color:#eee; border:1px solid #3a3a3a; border-radius:6px;">
+        <option value="400">400px (元アプリと同じ・最も安全)</option>
+        <option value="800">800px</option>
+        <option value="1080" selected>1080px (Tweet用おすすめ)</option>
+        <option value="1440">1440px</option>
+        <option value="2048">2048px</option>
+        <option value="0">元のサイズ (X再エンコでiCCPが落ちる可能性大)</option>
+      </select>
+    </div>
+    <div class="slider-row">
+      <label>出力形式<span class="val" id="formatVal">UltraHDR JPEG</span></label>
+      <select id="outFormat" style="width:100%; padding:6px; background:#2a2a2a; color:#eee; border:1px solid #3a3a3a; border-radius:6px;">
+        <option value="ultrahdr" selected>UltraHDR JPEG (SDRで元写真・推奨)</option>
+        <option value="pq">PQ PNG (HDRブラウザ専用)</option>
+      </select>
+    </div>
+  </div>
+  <div class="canvas-area">
+    <div class="canvas-wrap"><canvas id="canvas" width="640" height="480"></canvas></div>
+  </div>
+  <div class="status" id="status">画像を読み込んで開始してください</div>
+</div>
+<script>
+// ===========================================================================
+// PQ ICC profile (BT.2100 PQ, embedded as base64 so this file works offline)
+// ===========================================================================
+const PQ_ICC_B64 = "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WEhYdlilWNRZA1kxWWBZj1m+We1aHFpLWntaqlrZWwlbOFtnW5dbx1v2XCZcVlyGXLVc5V0VXUVddV2mXdZeBl42Xmdel17IXvhfKV9aX4pfu1/sYB1gTmB/YLBg4WETYURhdWGnYdhiCmI7Ym1in2LQYwJjNGNmY5hjymP8ZC9kYWSTZMZk+GUrZV1lkGXDZfVmKGZbZo5mwWb0ZyhnW2eOZ8Jn9WgpaFxokGjEaPdpK2lfaZNpx2n8ajBqZGqYas1rAWs2a2trn2vUbAlsPmxzbKhs3W0SbUhtfW2ybehuHW5Tboluv270bypvYG+Wb81wA3A5cHBwpnDdcRNxSnGBcbhx7nIlcl1ylHLLcwJzOnNxc6lz4HQYdFB0iHTAdPh1MHVodaB12HYRdkl2gna7dvN3LHdld55313gQeEp4g3i8ePZ5L3lpeaN53XoXelF6i3rFev97OXt0e6576XwkfF58mXzUfQ99Sn2GfcF9/H44fnN+r37rfyZ/Yn+ef9uAF4BTgI+AzIEIgUWBgoG/gfyCOYJ2grOC8IMug2uDqYPmhCSEYoSghN6FHIVbhZmF14YWhlWGk4bShxGHUIePh86IDohNiI2IzIkMiUyJjInMigyKTIqNis2LDotOi4+L0IwRjFKMk4zUjRaNV42ZjdqOHI5ejqCO4o8kj2ePqY/skC6QcZC0kPeROpF9kcGSBJJIkouSz5MTk1eTm5PflCOUaJSslPGVNpV7lcCWBZZKlo+W1Zcal2CXppfsmDKYeJi+mQSZS5mSmdiaH5pmmq2a9Js8m4Oby5wTnFqcopzqnTOde53DngyeVZ6dnuafL595n8KgC6BVoJ+g6KEyoXyhx6IRoluipqLxozyjh6PSpB2kaKS0pQClS6WXpeOmL6Z8psinFadip66n+6hIqJao46kxqX6pzKoaqmiqtqsFq1OroqvxrECsj6zerS2tfa3NrhyubK68rw2vXa+tr/6wT7CgsPGxQrGUseWyN7KJstuzLbN/s9K0JLR3tMq1HbVwtcS2F7Zrtr+3E7dnt7u4ELhkuLm5Drljubi6Drpjurm7D7tlu7u8ErxovL+9Fr1tvcS+G75zvsu/I797v9PAK8CEwN3BNcGOwejCQcKbwvTDTsOoxAPEXcS4xRPFbcXJxiTGf8bbxzfHk8fvyEzIqMkFyWLJv8ocynrK18s1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";
+
+function decodeB64(b64) {
+  const bin = atob(b64);
+  const u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  return u;
+}
+const PQ_ICC_BYTES = decodeB64(PQ_ICC_B64);
+
+// ===========================================================================
+// PQ transfer function (SMPTE ST 2084)
+// ===========================================================================
+const PQ_M1 = 2610 / 16384;
+const PQ_M2 = (2523 / 4096) * 128;
+const PQ_C1 = 3424 / 4096;
+const PQ_C2 = (2413 / 4096) * 32;
+const PQ_C3 = (2392 / 4096) * 32;
+
+function srgbToLinear(v) {
+  const t = v / 255;
+  return t <= 0.04045 ? t / 12.92 : Math.pow((t + 0.055) / 1.055, 2.4);
+}
+function linearToPQ(nits) {
+  const t = Math.pow(Math.max(0, Math.min(10000, nits)) / 10000, PQ_M1);
+  return Math.pow((PQ_C1 + PQ_C2 * t) / (1 + PQ_C3 * t), PQ_M2);
+}
+
+// ===========================================================================
+// PNG chunk utilities — replicates the original glow-icon-maker's iCCP injector
+// ===========================================================================
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = (c >>> 8) ^ CRC_TABLE[(c ^ bytes[i]) & 0xff];
+  return (c ^ 0xffffffff) >>> 0;
+}
+function makeChunk(type, data) {
+  const n = data.length;
+  const out = new Uint8Array(8 + n + 4);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, n);
+  out[4] = type.charCodeAt(0); out[5] = type.charCodeAt(1);
+  out[6] = type.charCodeAt(2); out[7] = type.charCodeAt(3);
+  out.set(data, 8);
+  const crcSrc = new Uint8Array(4 + n);
+  crcSrc.set(out.slice(4, 8), 0);
+  crcSrc.set(data, 4);
+  dv.setUint32(8 + n, crc32(crcSrc));
+  return out;
+}
+async function makeICCPChunk(iccBytes) {
+  const name = new TextEncoder().encode("ICC Profile");
+  const cs = new CompressionStream("deflate");
+  const w = cs.writable.getWriter();
+  w.write(iccBytes); w.close();
+  const compressed = new Uint8Array(await new Response(cs.readable).arrayBuffer());
+  const data = new Uint8Array(name.length + 2 + compressed.length);
+  data.set(name, 0);
+  data[name.length] = 0;
+  data[name.length + 1] = 0;
+  data.set(compressed, name.length + 2);
+  return makeChunk("iCCP", data);
+}
+async function injectICC(pngBlob) {
+  const buf = new Uint8Array(await pngBlob.arrayBuffer());
+  const iccChunk = await makeICCPChunk(PQ_ICC_BYTES);
+  const strip = new Set(["iCCP", "sRGB", "gAMA", "cHRM"]);
+  const out = [buf.slice(0, 8)];
+  let pos = 8;
+  let inserted = false;
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  while (pos < buf.length) {
+    const len = dv.getUint32(pos);
+    const type = String.fromCharCode(buf[pos + 4], buf[pos + 5], buf[pos + 6], buf[pos + 7]);
+    const end = pos + 8 + len + 4;
+    if (!strip.has(type)) out.push(buf.slice(pos, end));
+    if (type === "IHDR" && !inserted) { out.push(iccChunk); inserted = true; }
+    pos = end;
+    if (type === "IEND") break;
+  }
+  const total = out.reduce((s, a) => s + a.length, 0);
+  const merged = new Uint8Array(total);
+  let off = 0; for (const a of out) { merged.set(a, off); off += a.length; }
+  return new Blob([merged], { type: "image/png" });
+}
+
+// ===========================================================================
+// App state and UI
+// ===========================================================================
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const HANDLE = 12;
+const ROT_HANDLE_R = 7;
+const ROT_OFFSET = 26;     // distance (px) from top-center to rotation handle
+const MIN_SIZE = 4;
+
+let image = null;
+let shapes = [];   // { id, type:'ellipse'|'rect', x, y, w, h, rotation, brightness, feather }
+let selectedId = null;
+let tool = "select";
+let nextId = 1;
+let drag = null;
+
+function rotPt(cx, cy, x, y, angle) {
+  const c = Math.cos(angle), s = Math.sin(angle);
+  const dx = x - cx, dy = y - cy;
+  return [cx + dx * c - dy * s, cy + dx * s + dy * c];
+}
+function shapeCenter(s) { return [s.x + s.w / 2, s.y + s.h / 2]; }
+
+const $ = (id) => document.getElementById(id);
+
+function setStatus(msg) { $("status").textContent = msg; }
+
+function setTool(t) {
+  tool = t;
+  $("toolEllipse").classList.toggle("active", t === "ellipse");
+  $("toolRect").classList.toggle("active", t === "rect");
+  $("toolSelect").classList.toggle("active", t === "select");
+  canvas.style.cursor = t === "select" ? "default" : "crosshair";
+}
+
+function getSelected() { return shapes.find(s => s.id === selectedId); }
+
+function syncSlidersToSelection() {
+  const s = getSelected();
+  const disabled = !s;
+  $("brightnessRow").classList.toggle("disabled", disabled);
+  $("featherRow").classList.toggle("disabled", disabled);
+  $("deleteBtn").disabled = disabled;
+  if (s) {
+    $("brightness").value = s.brightness;
+    $("brightnessVal").textContent = s.brightness;
+    $("feather").value = s.feather;
+    $("featherVal").textContent = s.feather;
+  }
+}
+
+function selectShape(id) { selectedId = id; syncSlidersToSelection(); render(); }
+
+function fitCanvasToImage() {
+  if (!image) return;
+  const maxW = Math.min(window.innerWidth - 48, 980);
+  const maxH = Math.min(window.innerHeight - 320, 720);
+  const scale = Math.min(maxW / image.width, maxH / image.height, 1);
+  canvas.width = Math.max(1, Math.round(image.width * scale));
+  canvas.height = Math.max(1, Math.round(image.height * scale));
+}
+
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!image) {
+    ctx.fillStyle = "#222"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#666"; ctx.font = "14px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("画像を読み込んでください", canvas.width / 2, canvas.height / 2);
+    return;
+  }
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  for (const s of shapes) drawShapePreview(s, s.id === selectedId);
+}
+
+function drawShapePreview(s, selected) {
+  const [cx, cy] = shapeCenter(s);
+  const rot = s.rotation || 0;
+
+  // Soft warm tint to indicate where glow will appear (HDR look can't be shown in SDR preview).
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rot);
+  ctx.globalCompositeOperation = "screen";
+  const intensity = Math.min(1, Math.max(0, (s.brightness - 203) / 4000));
+  const alpha = 0.18 + 0.45 * intensity;
+  if (s.type === "ellipse") {
+    const rx = Math.max(1, s.w / 2), ry = Math.max(1, s.h / 2);
+    const rMin = Math.min(rx, ry);
+    const inner = Math.max(0, rMin - s.feather) / rMin;
+    const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, rMin);
+    grad.addColorStop(0, `rgba(255, 240, 200, ${alpha})`);
+    grad.addColorStop(inner, `rgba(255, 240, 200, ${alpha})`);
+    grad.addColorStop(1, "rgba(255, 240, 200, 0)");
+    ctx.fillStyle = grad;
+    ctx.save();
+    ctx.scale(rx / rMin, ry / rMin);
+    ctx.beginPath(); ctx.arc(0, 0, rMin, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  } else {
+    if (s.feather > 0) ctx.filter = `blur(${Math.min(40, s.feather / 2)}px)`;
+    ctx.fillStyle = `rgba(255, 240, 200, ${alpha})`;
+    ctx.fillRect(-s.w / 2, -s.h / 2, s.w, s.h);
+    ctx.filter = "none";
+  }
+  ctx.restore();
+
+  // Outline (rotated) + corner & rotation handles for the selected shape
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(rot);
+  ctx.strokeStyle = selected ? "#60a5fa" : "rgba(255,255,255,0.55)";
+  ctx.lineWidth = selected ? 1.8 : 1;
+  ctx.setLineDash(selected ? [6, 4] : [3, 3]);
+  if (s.type === "ellipse") {
+    ctx.beginPath();
+    ctx.ellipse(0, 0, Math.max(1, s.w / 2), Math.max(1, s.h / 2), 0, 0, Math.PI * 2);
+    ctx.stroke();
+  } else {
+    ctx.strokeRect(-s.w / 2, -s.h / 2, s.w, s.h);
+  }
+  ctx.setLineDash([]);
+  if (selected) {
+    // Rotation handle stem + knob (above top-center, in local frame)
+    ctx.strokeStyle = "#60a5fa";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(0, -s.h / 2);
+    ctx.lineTo(0, -s.h / 2 - ROT_OFFSET);
+    ctx.stroke();
+    ctx.fillStyle = "#60a5fa";
+    ctx.beginPath();
+    ctx.arc(0, -s.h / 2 - ROT_OFFSET, ROT_HANDLE_R, 0, Math.PI * 2);
+    ctx.fill();
+    // Corner handles (drawn in local space)
+    const hx = s.w / 2, hy = s.h / 2;
+    for (const [px, py] of [[-hx, -hy], [hx, -hy], [-hx, hy], [hx, hy]]) {
+      ctx.fillRect(px - HANDLE / 2, py - HANDLE / 2, HANDLE, HANDLE);
+    }
+  }
+  ctx.restore();
+}
+
+// World-space corner positions, rotated. Order: tl, tr, bl, br.
+function corners(s) {
+  const [cx, cy] = shapeCenter(s);
+  const rot = s.rotation || 0;
+  const hx = s.w / 2, hy = s.h / 2;
+  return [
+    rotPt(cx, cy, cx - hx, cy - hy, rot),
+    rotPt(cx, cy, cx + hx, cy - hy, rot),
+    rotPt(cx, cy, cx - hx, cy + hy, rot),
+    rotPt(cx, cy, cx + hx, cy + hy, rot),
+  ];
+}
+
+function rotHandleWorld(s) {
+  const [cx, cy] = shapeCenter(s);
+  return rotPt(cx, cy, cx, cy - s.h / 2 - ROT_OFFSET, s.rotation || 0);
+}
+
+function hitTest(s, x, y) {
+  // Rotation handle first (most outside)
+  const [rhx, rhy] = rotHandleWorld(s);
+  if (Math.hypot(x - rhx, y - rhy) <= ROT_HANDLE_R + 4) return "rotate";
+  // Corner handles (rotated)
+  const cs = corners(s);
+  const names = ["tl", "tr", "bl", "br"];
+  for (let i = 0; i < 4; i++) {
+    if (Math.abs(x - cs[i][0]) <= HANDLE && Math.abs(y - cs[i][1]) <= HANDLE) return names[i];
+  }
+  // Body: transform input into shape-local axis-aligned space, then standard test
+  const [cx, cy] = shapeCenter(s);
+  const [lx, ly] = rotPt(cx, cy, x, y, -(s.rotation || 0));
+  if (s.type === "ellipse") {
+    const rx = Math.max(1, s.w / 2), ry = Math.max(1, s.h / 2);
+    const u = (lx - cx) / rx, v = (ly - cy) / ry;
+    if (u * u + v * v <= 1) return "move";
+  } else {
+    if (lx >= s.x && lx <= s.x + s.w && ly >= s.y && ly <= s.y + s.h) return "move";
+  }
+  return null;
+}
+
+function getCanvasPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * (canvas.width / rect.width),
+    y: (e.clientY - rect.top) * (canvas.height / rect.height),
+  };
+}
+
+canvas.addEventListener("pointerdown", (e) => {
+  if (!image) return;
+  canvas.setPointerCapture(e.pointerId);
+  const { x, y } = getCanvasPos(e);
+  if (tool === "ellipse" || tool === "rect") {
+    const s = {
+      id: nextId++, type: tool,
+      x, y, w: 0, h: 0,
+      rotation: 0,
+      brightness: +$("brightness").value,
+      feather: +$("feather").value,
+    };
+    shapes.push(s);
+    selectedId = s.id;
+    drag = { mode: "create", shape: s, startX: x, startY: y };
+    syncSlidersToSelection();
+    render();
+    return;
+  }
+  for (let i = shapes.length - 1; i >= 0; i--) {
+    const sh = shapes[i];
+    const mode = hitTest(sh, x, y);
+    if (mode) {
+      selectedId = sh.id;
+      if (mode === "move") {
+        drag = { mode, shape: sh, startX: x, startY: y, sx: sh.x, sy: sh.y };
+      } else if (mode === "rotate") {
+        const [cx, cy] = shapeCenter(sh);
+        drag = {
+          mode, shape: sh,
+          startAngle: Math.atan2(y - cy, x - cx),
+          baseRotation: sh.rotation || 0,
+        };
+      } else {
+        // Resize: pin the opposite corner in world coordinates so rotation is preserved
+        const cs = corners(sh);
+        const oppIndex = { tl: 3, tr: 2, bl: 1, br: 0 }[mode];
+        drag = {
+          mode, shape: sh,
+          fixed: cs[oppIndex],
+          rotation: sh.rotation || 0,
+        };
+      }
+      syncSlidersToSelection(); render();
+      return;
+    }
+  }
+  selectShape(null);
+});
+
+canvas.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  const { x, y } = getCanvasPos(e);
+  const s = drag.shape;
+  if (drag.mode === "create") {
+    s.x = Math.min(drag.startX, x);
+    s.y = Math.min(drag.startY, y);
+    s.w = Math.abs(x - drag.startX);
+    s.h = Math.abs(y - drag.startY);
+  } else if (drag.mode === "move") {
+    s.x = drag.sx + (x - drag.startX);
+    s.y = drag.sy + (y - drag.startY);
+  } else if (drag.mode === "rotate") {
+    const [cx, cy] = shapeCenter(s);
+    let a = Math.atan2(y - cy, x - cx) - drag.startAngle + drag.baseRotation;
+    // Snap to 15° steps when Shift is held
+    if (e.shiftKey) {
+      const step = Math.PI / 12;
+      a = Math.round(a / step) * step;
+    }
+    s.rotation = a;
+  } else {
+    // Resize while preserving rotation: opposite world corner stays fixed
+    const [fx, fy] = drag.fixed;
+    const cx = (fx + x) / 2, cy = (fy + y) / 2;
+    const dxw = x - fx, dyw = y - fy;
+    const c = Math.cos(-drag.rotation), si = Math.sin(-drag.rotation);
+    const localDx = dxw * c - dyw * si;
+    const localDy = dxw * si + dyw * c;
+    const w = Math.max(MIN_SIZE, Math.abs(localDx));
+    const h = Math.max(MIN_SIZE, Math.abs(localDy));
+    s.x = cx - w / 2;
+    s.y = cy - h / 2;
+    s.w = w; s.h = h;
+  }
+  render();
+});
+
+canvas.addEventListener("pointerup", () => {
+  if (drag && drag.mode === "create") {
+    if (drag.shape.w < MIN_SIZE || drag.shape.h < MIN_SIZE) {
+      shapes = shapes.filter(s => s !== drag.shape);
+      selectedId = null;
+    } else {
+      setTool("select");
+    }
+    syncSlidersToSelection();
+    render();
+  }
+  drag = null;
+});
+
+window.addEventListener("keydown", (e) => {
+  if ((e.key === "Delete" || e.key === "Backspace") && selectedId != null && e.target === document.body) {
+    shapes = shapes.filter(s => s.id !== selectedId);
+    selectShape(null);
+    e.preventDefault();
+  }
+});
+
+$("toolSelect").onclick = () => setTool("select");
+$("toolEllipse").onclick = () => setTool("ellipse");
+$("toolRect").onclick = () => setTool("rect");
+$("clearBtn").onclick = () => { shapes = []; selectShape(null); };
+$("deleteBtn").onclick = () => {
+  if (selectedId == null) return;
+  shapes = shapes.filter(s => s.id !== selectedId);
+  selectShape(null);
+};
+$("loadFile").onchange = (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const img = new Image();
+  img.onload = () => {
+    image = img; shapes = []; selectedId = null;
+    fitCanvasToImage();
+    syncSlidersToSelection();
+    render();
+    setStatus(`読込: ${img.width}×${img.height}px`);
+    URL.revokeObjectURL(img.src);
+  };
+  img.src = URL.createObjectURL(f);
+};
+$("brightness").oninput = (e) => {
+  $("brightnessVal").textContent = e.target.value;
+  const s = getSelected(); if (s) { s.brightness = +e.target.value; render(); }
+};
+$("feather").oninput = (e) => {
+  $("featherVal").textContent = e.target.value;
+  const s = getSelected(); if (s) { s.feather = +e.target.value; render(); }
+};
+$("bg").oninput = (e) => { $("bgVal").textContent = e.target.value; };
+$("maxSize").onchange = (e) => { $("maxSizeVal").textContent = e.target.value === "0" ? "原寸" : e.target.value; };
+
+// ===========================================================================
+// Export: per-pixel mask -> per-pixel nits -> PQ encode -> PNG + iCCP
+// ===========================================================================
+async function buildHDRBlob() {
+  if (!image) throw new Error("画像が読み込まれていません");
+  await new Promise(r => requestAnimationFrame(r));
+
+  const maxSize = +$("maxSize").value;
+  let targetW = image.width, targetH = image.height;
+  if (maxSize > 0 && Math.max(image.width, image.height) > maxSize) {
+    const r = maxSize / Math.max(image.width, image.height);
+    targetW = Math.max(1, Math.round(image.width * r));
+    targetH = Math.max(1, Math.round(image.height * r));
+  }
+
+  const out = document.createElement("canvas");
+  out.width = targetW;
+  out.height = targetH;
+  const octx = out.getContext("2d");
+  octx.imageSmoothingEnabled = true;
+  octx.imageSmoothingQuality = "high";
+  octx.drawImage(image, 0, 0, targetW, targetH);
+  const imgData = octx.getImageData(0, 0, targetW, targetH);
+  const d = imgData.data;
+
+  const bgNits = +$("bg").value;
+  const scale = targetW / canvas.width;
+  const shapesO = shapes.map(s => {
+    const x = s.x * scale, y = s.y * scale, w = s.w * scale, h = s.h * scale, f = s.feather * scale;
+    const rot = s.rotation || 0;
+    return {
+      type: s.type, x, y, w, h, f,
+      brightness: s.brightness,
+      cx: x + w / 2, cy: y + h / 2,
+      rx: Math.max(1, w / 2), ry: Math.max(1, h / 2),
+      x2: x + w, y2: y + h,
+      cosNeg: Math.cos(-rot), sinNeg: Math.sin(-rot),
+      rotated: rot !== 0,
+    };
+  });
+
+  const W = out.width, H = out.height;
+  for (let py = 0; py < H; py++) {
+    for (let px = 0; px < W; px++) {
+      let nits = bgNits;
+      for (const s of shapesO) {
+        let m = 0;
+        // Transform pixel into shape's axis-aligned (unrotated) frame
+        let lpx = px, lpy = py;
+        if (s.rotated) {
+          const dx = px - s.cx, dy = py - s.cy;
+          lpx = s.cx + dx * s.cosNeg - dy * s.sinNeg;
+          lpy = s.cy + dx * s.sinNeg + dy * s.cosNeg;
+        }
+        if (s.type === "ellipse") {
+          const u = (lpx - s.cx) / s.rx;
+          const v = (lpy - s.cy) / s.ry;
+          const dn = Math.sqrt(u * u + v * v);
+          if (dn < 1) {
+            const rMin = Math.min(s.rx, s.ry);
+            const fn = s.f / rMin;
+            m = fn <= 0 ? 1 : Math.min(1, (1 - dn) / fn);
+          }
+        } else {
+          if (lpx >= s.x && lpx <= s.x2 && lpy >= s.y && lpy <= s.y2) {
+            const inset = Math.min(lpx - s.x, s.x2 - lpx, lpy - s.y, s.y2 - lpy);
+            m = s.f <= 0 ? 1 : Math.min(1, inset / s.f);
+          }
+        }
+        if (m > 0) {
+          const t = bgNits + (s.brightness - bgNits) * m;
+          if (t > nits) nits = t;
+        }
+      }
+      const i = (py * W + px) * 4;
+      if (d[i + 3] === 0) { d[i] = 0; d[i + 1] = 0; d[i + 2] = 0; continue; }
+      const lr = srgbToLinear(d[i]) * nits;
+      const lg = srgbToLinear(d[i + 1]) * nits;
+      const lb = srgbToLinear(d[i + 2]) * nits;
+      d[i]     = Math.round(linearToPQ(lr) * 255);
+      d[i + 1] = Math.round(linearToPQ(lg) * 255);
+      d[i + 2] = Math.round(linearToPQ(lb) * 255);
+    }
+  }
+  octx.putImageData(imgData, 0, 0);
+
+  const pngBlob = await new Promise((resolve, reject) =>
+    out.toBlob(b => b ? resolve(b) : reject(new Error("toBlob failed")), "image/png")
+  );
+  return await injectICC(pngBlob);
+}
+
+// ===========================================================================
+// UltraHDR JPEG (ISO 21496-1 / Google UltraHDR)
+//   - SDR-only viewers see the base JPEG (= the original photo) as-is.
+//   - HDR-aware viewers read the gain map JPEG appended after EOI and the
+//     hdrgm:* XMP metadata, then boost pixels per the gain map.
+//   Layout: [primary JPEG with Container XMP] [gain-map JPEG with hdrgm XMP]
+// ===========================================================================
+
+function computeTargetParamsForUltraHDR() {
+  if (!image) throw new Error("画像が読み込まれていません");
+  const maxSize = +$("maxSize").value;
+  let targetW = image.width, targetH = image.height;
+  if (maxSize > 0 && Math.max(image.width, image.height) > maxSize) {
+    const r = maxSize / Math.max(image.width, image.height);
+    targetW = Math.max(1, Math.round(image.width * r));
+    targetH = Math.max(1, Math.round(image.height * r));
+  }
+  return { targetW, targetH };
+}
+
+// Per-pixel mask evaluation reused for both PQ and UltraHDR paths.
+function projectShapesToImage(scale) {
+  return shapes.map(s => {
+    const x = s.x * scale, y = s.y * scale, w = s.w * scale, h = s.h * scale, f = s.feather * scale;
+    const rot = s.rotation || 0;
+    return {
+      type: s.type, x, y, w, h, f,
+      brightness: s.brightness,
+      cx: x + w / 2, cy: y + h / 2,
+      rx: Math.max(1, w / 2), ry: Math.max(1, h / 2),
+      x2: x + w, y2: y + h,
+      cosNeg: Math.cos(-rot), sinNeg: Math.sin(-rot),
+      rotated: rot !== 0,
+    };
+  });
+}
+
+function nitsAtPixel(px, py, shapesO, bgNits) {
+  let nits = bgNits;
+  for (const s of shapesO) {
+    let m = 0;
+    let lpx = px, lpy = py;
+    if (s.rotated) {
+      const dx = px - s.cx, dy = py - s.cy;
+      lpx = s.cx + dx * s.cosNeg - dy * s.sinNeg;
+      lpy = s.cy + dx * s.sinNeg + dy * s.cosNeg;
+    }
+    if (s.type === "ellipse") {
+      const u = (lpx - s.cx) / s.rx;
+      const v = (lpy - s.cy) / s.ry;
+      const dn = Math.sqrt(u * u + v * v);
+      if (dn < 1) {
+        const rMin = Math.min(s.rx, s.ry);
+        const fn = s.f / rMin;
+        m = fn <= 0 ? 1 : Math.min(1, (1 - dn) / fn);
+      }
+    } else {
+      if (lpx >= s.x && lpx <= s.x2 && lpy >= s.y && lpy <= s.y2) {
+        const inset = Math.min(lpx - s.x, s.x2 - lpx, lpy - s.y, s.y2 - lpy);
+        m = s.f <= 0 ? 1 : Math.min(1, inset / s.f);
+      }
+    }
+    if (m > 0) {
+      const t = bgNits + (s.brightness - bgNits) * m;
+      if (t > nits) nits = t;
+    }
+  }
+  return nits;
+}
+
+function canvasToJPEG(cnv, quality) {
+  return new Promise((resolve, reject) =>
+    cnv.toBlob(b => b ? resolve(b) : reject(new Error("JPEG encode failed")), "image/jpeg", quality)
+  );
+}
+
+// Insert an XMP APP1 marker right after the SOI of an existing JPEG.
+// Single-segment XMP only (payload ≤ ~64KB). Our XMP is well under 4KB.
+async function injectXMPApp1(jpegBlob, xmpStr) {
+  const buf = new Uint8Array(await jpegBlob.arrayBuffer());
+  if (buf[0] !== 0xFF || buf[1] !== 0xD8) throw new Error("not a JPEG");
+  const ID = new TextEncoder().encode("http://ns.adobe.com/xap/1.0/\0");
+  const XMP = new TextEncoder().encode(xmpStr);
+  const segLen = ID.length + XMP.length + 2; // includes the 2-byte length field
+  if (segLen > 65535) throw new Error("XMP too large for a single APP1 segment");
+  const marker = new Uint8Array(4 + ID.length + XMP.length);
+  marker[0] = 0xFF; marker[1] = 0xE1;
+  marker[2] = (segLen >> 8) & 0xff;
+  marker[3] = segLen & 0xff;
+  marker.set(ID, 4);
+  marker.set(XMP, 4 + ID.length);
+  const out = new Uint8Array(2 + marker.length + buf.length - 2);
+  out[0] = 0xFF; out[1] = 0xD8;
+  out.set(marker, 2);
+  out.set(buf.subarray(2), 2 + marker.length);
+  return out;
+}
+
+function buildPrimaryXMP(gainMapJpegLength) {
+  return `<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="HDRGlowMaker">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+        xmlns:hdrgm="http://ns.adobe.com/hdr-gain-map/1.0/"
+        xmlns:Container="http://ns.google.com/photos/1.0/container/"
+        xmlns:Item="http://ns.google.com/photos/1.0/container/item/"
+        hdrgm:Version="1.0">
+      <Container:Directory>
+        <rdf:Seq>
+          <rdf:li rdf:parseType="Resource">
+            <Container:Item Item:Semantic="Primary" Item:Mime="image/jpeg"/>
+          </rdf:li>
+          <rdf:li rdf:parseType="Resource">
+            <Container:Item Item:Semantic="GainMap" Item:Mime="image/jpeg" Item:Length="${gainMapJpegLength}"/>
+          </rdf:li>
+        </rdf:Seq>
+      </Container:Directory>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>`;
+}
+
+function buildGainMapXMP(gainMapMin, gainMapMax, hdrCapacityMax) {
+  return `<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="HDRGlowMaker">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+        xmlns:hdrgm="http://ns.adobe.com/hdr-gain-map/1.0/"
+        hdrgm:Version="1.0"
+        hdrgm:GainMapMin="${gainMapMin.toFixed(6)}"
+        hdrgm:GainMapMax="${gainMapMax.toFixed(6)}"
+        hdrgm:Gamma="1.0"
+        hdrgm:OffsetSDR="0.015625"
+        hdrgm:OffsetHDR="0.015625"
+        hdrgm:HDRCapacityMin="0.0"
+        hdrgm:HDRCapacityMax="${hdrCapacityMax.toFixed(6)}"
+        hdrgm:BaseRenditionIsHDR="False"/>
+  </rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>`;
+}
+
+async function buildUltraHDRBlob() {
+  const { targetW, targetH } = computeTargetParamsForUltraHDR();
+  await new Promise(r => requestAnimationFrame(r));
+
+  // --- 1. SDR base = original photo at target size ---
+  const baseCnv = document.createElement("canvas");
+  baseCnv.width = targetW; baseCnv.height = targetH;
+  const bctx = baseCnv.getContext("2d");
+  bctx.imageSmoothingEnabled = true;
+  bctx.imageSmoothingQuality = "high";
+  bctx.drawImage(image, 0, 0, targetW, targetH);
+
+  // --- 2. Gain map ---
+  // Per-pixel boost in log2 units: gain_log2 = log2(target_nits / sdrRef).
+  // Encode into 8-bit: g = clamp((gain_log2 - GainMapMin) / (GainMapMax - GainMapMin), 0, 1) * 255
+  const bgNits = +$("bg").value;          // background reference (SDR diffuse white)
+  const sdrRef = bgNits;
+  const scale = targetW / canvas.width;
+  const shapesO = projectShapesToImage(scale);
+
+  // Pick GainMapMax from the brightest shape (with a small floor for headroom).
+  let maxLog2 = 0;
+  for (const s of shapes) {
+    const b = Math.log2(Math.max(1, s.brightness / sdrRef));
+    if (b > maxLog2) maxLog2 = b;
+  }
+  if (maxLog2 < 0.01) maxLog2 = 1; // no shapes / no boost: nominal range
+  const gainMapMin = 0;
+  const gainMapMax = maxLog2;
+  const range = gainMapMax - gainMapMin;
+
+  const gainCnv = document.createElement("canvas");
+  gainCnv.width = targetW; gainCnv.height = targetH;
+  const gctx = gainCnv.getContext("2d");
+  const gain = gctx.createImageData(targetW, targetH);
+  const gd = gain.data;
+
+  for (let py = 0; py < targetH; py++) {
+    for (let px = 0; px < targetW; px++) {
+      const nits = nitsAtPixel(px, py, shapesO, sdrRef);
+      let v = 0;
+      if (nits > sdrRef) {
+        const log2g = Math.log2(nits / sdrRef);
+        v = Math.round(Math.max(0, Math.min(1, (log2g - gainMapMin) / range)) * 255);
+      }
+      const i = (py * targetW + px) * 4;
+      gd[i] = v; gd[i + 1] = v; gd[i + 2] = v; gd[i + 3] = 255;
+    }
+  }
+  gctx.putImageData(gain, 0, 0);
+
+  // --- 3. Encode both as JPEG ---
+  const baseJpegRaw = await canvasToJPEG(baseCnv, 0.92);
+  const gainJpegRaw = await canvasToJPEG(gainCnv, 0.90);
+
+  // --- 4. XMP injection ---
+  // Inject gain map's XMP first so we know its final length for the primary's Container:Length.
+  const gainXMP = buildGainMapXMP(gainMapMin, gainMapMax, gainMapMax);
+  const gainWithXMP = await injectXMPApp1(gainJpegRaw, gainXMP);
+
+  const primaryXMP = buildPrimaryXMP(gainWithXMP.length);
+  const baseWithXMP = await injectXMPApp1(baseJpegRaw, primaryXMP);
+
+  // --- 5. Concatenate primary + secondary ---
+  const merged = new Uint8Array(baseWithXMP.length + gainWithXMP.length);
+  merged.set(baseWithXMP, 0);
+  merged.set(gainWithXMP, baseWithXMP.length);
+  return new Blob([merged], { type: "image/jpeg" });
+}
+
+// ---------------------------------------------------------------------------
+// Save / share dispatch
+// ---------------------------------------------------------------------------
+function outputFormat() { return $("outFormat").value; }
+function outputMeta() {
+  return outputFormat() === "ultrahdr"
+    ? { ext: "jpg",  mime: "image/jpeg", label: "UltraHDR JPEG", build: buildUltraHDRBlob }
+    : { ext: "png",  mime: "image/png",  label: "HDR PNG (PQ)", build: buildHDRBlob };
+}
+
+async function saveHDR() {
+  const meta = outputMeta();
+  setStatus(`${meta.label} を生成中...`);
+  const blob = await meta.build();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `hdr_partial_glow.${meta.ext}`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+  setStatus(`${meta.label} 保存完了 (${(blob.size / 1024).toFixed(1)} KB)`);
+}
+
+// Twitter (X) re-encodes uploads from the web/Files picker and strips iCCP,
+// killing the HDR tag. Web Share API hands the file straight to the X app on
+// iOS/Android — the original ピカピカアイコンメーカー relies on this too.
+async function shareHDR() {
+  const meta = outputMeta();
+  setStatus(`${meta.label} を生成中...`);
+  const blob = await meta.build();
+  const file = new File([blob], `hdr_partial_glow.${meta.ext}`, { type: meta.mime });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({
+        files: [file],
+        title: "HDR部分光るやつ",
+        text: "#HDRPNG #ひかるやつ",
+      });
+      setStatus(`共有完了 (${(blob.size / 1024).toFixed(1)} KB / ${meta.label})`);
+      return;
+    } catch (err) {
+      if (err && err.name === "AbortError") { setStatus("共有キャンセル"); return; }
+      throw err;
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `hdr_partial_glow.${meta.ext}`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+  setStatus(`Web Share非対応のためダウンロードしました (${meta.label})`);
+}
+
+$("outFormat").onchange = (e) => {
+  const lbl = e.target.value === "ultrahdr" ? "UltraHDR JPEG" : "PQ PNG";
+  $("formatVal").textContent = lbl;
+};
+$("saveBtn").onclick = () => saveHDR().catch(err => { console.error(err); setStatus("エラー: " + err.message); });
+$("shareBtn").onclick = () => shareHDR().catch(err => { console.error(err); setStatus("エラー: " + err.message); });
+if (!(navigator.canShare && typeof navigator.share === "function")) {
+  $("shareBtn").disabled = true;
+  $("shareBtn").title = "このブラウザはWeb Share API非対応。iOS/Android Safariなどで開いてください";
+}
+
+window.addEventListener("resize", () => { if (image) { fitCanvasToImage(); render(); } });
+
+render();
+setTool("select");
+</script>
+</body>
+</html>
+
